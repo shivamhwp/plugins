@@ -27,6 +27,8 @@ import type { Element, Page } from "../state/page.ts";
 import type { Json } from "../state/records.ts";
 import { canUseNativeInput, nativeText } from "../state/tabtools.ts";
 import { newTab } from "./core.ts";
+import { targetScope } from "../state/state.ts";
+import * as temptabs from "../state/temptabs.ts";
 import type { Ctx } from "./ctx.ts";
 import { register } from "./index.ts";
 import { leadingSelector, need, parse, SELECTOR_ALIAS, SELECTOR_FLAG, withSelector } from "./parse.ts";
@@ -176,9 +178,10 @@ async function cmdClick(ctx: Ctx, argv: string[]): Promise<Result> {
   if (options["new_tab"]) {
     const href = await page.call("(el) => { const a = el.closest('a[href]'); return a ? a.href : null; }", [element], { frame: element.frame });
     if (!href) throw new BrowseError(`--new-tab needs a link; ${selector} has no href`);
+    const bound = targetScope.getStore() !== undefined;
     const previous = ctx.state.current;
-    const tab = await newTab(ctx, String(href));
-    ctx.state.current = previous || tab.targetId;
+    const tab = await newTab(ctx, String(href), null, false, false, (late) => temptabs.mustClose(ctx.state, late, true), null, !bound);
+    if (!bound) ctx.state.current = previous || tab.targetId;
     return new Result({ clicked: selector, newTab: ctx.state.tabId(tab.targetId), url: tab.url });
   }
   if (options["touch"]) {

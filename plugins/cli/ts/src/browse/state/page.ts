@@ -783,13 +783,17 @@ export class Page {
           this.mainFrame = frameId;
           this.url = this.frames.get(frameId)?.url ?? "";
           this.navigations += 1;
+          this.state.noteNavigated(this.targetId, this.url);
         }
       }
     } else if (method === "Page.navigatedWithinDocument") {
       const frame = this.frames.get(String(params["frameId"]));
       if (frame) {
         frame.url = String(params["url"] ?? "");
-        if (frame.id === this.mainFrame) this.url = frame.url;
+        if (frame.id === this.mainFrame) {
+          this.url = frame.url;
+          this.state.noteNavigated(this.targetId, this.url);
+        }
       }
     } else if (method === "Page.frameDetached") {
       const frameId = String(params["frameId"]);

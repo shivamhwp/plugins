@@ -11,11 +11,11 @@ import { redact, redactJson } from "../../redact.ts";
 import { BrowseError, ConnectionLost, OutcomeUnknown, StaleRef, SUPERSEDED, Usage } from "../daemon-errors.ts";
 import type { JsonObject } from "../../json.ts";
 import { OUTPUT_CAP, pyValue, Result } from "../daemon/render.ts";
-import { content, savedBodyLine } from "../outfile.ts";
+import { AS_TEXT, content, savedBodyLine, TAKES_OUT } from "../outfile.ts";
 import { add, failedStep, flag } from "../metrics.ts";
 import { wellFormed, writeAllFd } from "../paths.ts";
 import { Ctx } from "./ctx.ts";
-import { ALIASES, dispatch, hooks, register } from "./index.ts";
+import { ALIASES, asksHelp, dispatch, hooks, register } from "./index.ts";
 import { parse } from "./parse.ts";
 import { inferredCode, remedyFor, remedyLine, tagged } from "../remedies.ts";
 import { commitShown } from "../snapshot/since.ts";
@@ -29,8 +29,6 @@ import { mayRetry, noteReadRetry } from "../act/retry.ts";
 export const BATCH_DEFAULT_CAP = OUTPUT_CAP;
 const NESTED_BATCH = "batch can't run inside batch";
 const CLOSE_INSIDE = "close ends this session, so in a batch it only runs as the last line; to close this session's tab and go on, use `tab close`";
-const TAKES_OUT = ["script", "eval", "read", "snapshot", "get"];
-const AS_TEXT = ["snapshot", "get"];
 const VALUE_FLAGS = ["--cdp", "--data-dir", "--enable", "--expect-loader", "--idle-timeout", "--init-script", "--max-output", "--namespace", "--port", "--screenshot-dir", "--screenshot-format", "--screenshot-quality", "--session", "--ws"];
 const BOOL_FLAGS = ["--annotate", "--capture-console", "--content-boundaries", "--debug", "--full", "--humanize", "--json", "--no-auto-dialog", "--no-changes", "--no-content-boundaries", "--no-humanize", "--no-pin-tab", "--no-text", "--pin-tab", "--show"];
 const LAUNCH_ONLY = [
@@ -219,7 +217,7 @@ function saveBatchLine(ctx: Ctx, name: string, result: Result, target: string): 
     if (typeof tree === "string") text = tree;
   } else if (!AS_TEXT.includes(name)) {
     const data = pyValue(result.data ?? {});
-    [text, summary] = content(name, data instanceof Map ? data : new Map(), target);
+    [text, summary] = content(name === "repl" ? "script" : name, data instanceof Map ? data : new Map(), target);
   }
   if (!strip(text, isSpace)) return [`✗ ${name} returned nothing to save, so ${target} wasn't written`, false];
   let saved: string;
@@ -242,8 +240,8 @@ const SELECTOR_PREFIX = "--selector=";
 const SELECTOR_FLAGS = new Set(["-s", "--selector"]);
 export const VALUE_FLAGS_TAKEN: ReadonlySet<string> = new Set([
   "--baseline", "--block", "--body", "--button", "--capability", "--categories", "--column", "--commit", "--concurrency", "--condition", "--content", "--content-type", "--count",
-  "--credential-provider", "--curl", "--delay", "--depth", "--description", "--domain", "--duration", "--enable", "--expires", "--field",
-  "--fields", "--filter", "--fixture", "--fn", "--format", "--from", "--headers", "--idle", "--init-script", "--item", "--kind", "--label", "--limit",
+  "--credential-provider", "--curl", "--delay", "--depth", "--description", "--domain", "--duration", "--enable", "--eval", "--expires", "--field",
+  "--fields", "--file", "--filter", "--fixture", "--fn", "--format", "--from", "--headers", "--idle", "--init-script", "--item", "--kind", "--label", "--limit",
   "--links", "--llms", "--load", "--match", "--max-chars", "--method", "--name", "--nth", "--origin", "--out", "--output", "--param", "--params",
   "--password", "--password-selector", "--patch", "--path", "--payload", "--port", "--position", "--prefix", "--profile", "--property", "--region", "--resource-type", "--role",
   "--save", "--scale", "--scope", "--screenshot-dir", "--screenshot-format", "--screenshot-quality", "--site", "--state", "--status", "--step",   "--submit-selector", "--tags", "--target", "--text", "--threshold", "--timeout", "--to", "--trace", "--type", "--url", "--username",
@@ -253,6 +251,8 @@ export const SHORT_VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
   snapshot: ["-d"],
   diff: ["-b", "-d", "-o", "-t"],
   wait: ["-t", "-u", "-l", "-f"],
+  script: ["-c", "-e", "-f"],
+  repl: ["-c", "-e", "-f"],
 };
 
 function takesValue(command: string, word: string): boolean {
@@ -617,12 +617,25 @@ function extras(ctx: Ctx): BatchExtras {
   return found;
 }
 
+async function lineSource(ctx: Ctx, args: string[]): Promise<string> {
+  const { SCRIPT_ALIASES, SCRIPT_FLAGS } = await import("../script/script.ts");
+  const [options, positionals] = parse(args, SCRIPT_FLAGS, SCRIPT_ALIASES);
+  const given = options["eval"] !== undefined || options["file"] !== undefined || positionals.some((word) => word !== "-");
+  if (!given) return "";
+  return (await import("../local.ts")).scriptSource(args, ctx.cwd, (file: string) => ctx.path(file));
+}
+
 export async function runOne(ctx: Ctx, argv: readonly string[], options: Record<string, unknown> = {}): Promise<[Result | null, BrowseError | null]> {
   if (argv.length === 0) return [null, new BrowseError("No command given")];
-  const name = ALIASES[argv[0] as string] ?? (argv[0] as string);
-  const sub = new Ctx(ctx.state, { ...ctx.options, ...options }, ctx.cwd, ctx.env, ctx.stdin, name);
+  const given = ALIASES[argv[0] as string] ?? (argv[0] as string);
+  const repl = given === "repl";
+  const name = repl ? "script" : given;
+  const helping = asksHelp(name, argv.slice(1));
+  const rest = repl && !helping ? ["--repl", ...argv.slice(1)] : argv.slice(1);
   try {
-    return [await dispatch(sub, name, argv.slice(1)), null];
+    const stdin = name === "script" && !helping ? await lineSource(ctx, argv.slice(1)) : ctx.stdin;
+    const sub = new Ctx(ctx.state, { ...ctx.options, ...options }, ctx.cwd, ctx.env, stdin, name);
+    return [await dispatch(sub, name, rest), null];
   } catch (error) {
     if (error instanceof BrowseError) return [null, error];
     throw error;

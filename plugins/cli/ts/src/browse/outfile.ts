@@ -9,11 +9,10 @@ import { groupThousands } from "../pylib/format.ts";
 import { joinedWords, splitlines } from "../pylib/str.ts";
 import { redact, redactJson } from "../redact.ts";
 import { Usage } from "./daemon-errors.ts";
-import { ALIASES } from "./tables.ts";
+import { ALIASES, AS_TEXT, TAKES_OUT } from "./tables.ts";
 import { wellFormed, writeAllFd } from "./paths.ts";
 
-export const TAKES_OUT = ["script", "eval", "read", "snapshot", "get"];
-export const AS_TEXT = ["snapshot", "get"];
+export { AS_TEXT, TAKES_OUT };
 const PREVIEW = 300;
 const EXCERPT = 500;
 const SHOWN = 3000;

@@ -7,7 +7,7 @@ export const CODES: ReadonlySet<string> = new Set([
   "not_editable", "not_focusable", "not_found", "not_own_tab", "not_run", "not_selectable", "not_visible", "notes_too_large", "nothing_to_save", "off_site",
   "outcome_unknown", "outside_viewport", "page_busy", "page_navigated", "page_script_error", "pdf_unreadable", "policy_refused", "profile_busy", "rate_limited",
   "redirected", "ref_drifted", "registry_full", "rejected", "result_too_large", "script_failed", "script_syntax", "session_busy", "session_closing", "session_limit", "setup_lost",
-  "stale_ref", "tab_asleep", "tab_closing", "tab_crashed", "tab_detached", "tab_gone", "tab_hidden", "tab_in_use", "tab_not_found", "tab_owned",
+  "stale_ref", "tab_asleep", "tab_closing", "tab_crashed", "tab_detached", "tab_gone", "tab_hidden", "tab_in_use", "tab_moved", "tab_not_found", "tab_owned",
   "target_replaced", "temporary_limit", "timeout", "unhandled_exception", "unknown_field", "unknown_ref", "unsupported", "usage",
   "viewport_needs_hidden_tab", "viewport_unsupported", "vocab_superseded",
 ]);

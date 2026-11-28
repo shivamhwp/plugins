@@ -17,7 +17,7 @@ import type { Ctx } from "./ctx.ts";
 import { register } from "./index.ts";
 import { need, normalizeUrl, parse, SELECTOR_ALIAS, SELECTOR_FLAG, withSelector } from "./parse.ts";
 import { readTextPy } from "./pyfile.ts";
-import { currentOrNew, frameOrMain, originOf, pyIntArg, resolve } from "./shared.ts";
+import { currentOrNew, frameOrMain, originOf, pyIntArg, refuseOnBorrowed, resolve } from "./shared.ts";
 import "../snapshot/collect.ts";
 import { siteToolsHeader } from "./tool.ts";
 
@@ -80,6 +80,14 @@ export async function cmdGet(ctx: Ctx, argv: string[]): Promise<Result> {
     let count = Number(await page.call("(s) => ardiaBrowse.queryAll(s).length", [args[1]], { frame, read: true }));
     if (count === 0) count = await pierce.countAll(page, frame, args[1] as string);
     return new Result({ count, selector: args[1] }, String(count));
+  }
+  if (what === "texts") {
+    need(args, 2, "get texts <selector>");
+    const frame = frameOrMain(ctx, page);
+    const raw = await page.call("(s) => ardiaBrowse.queryAll(s).slice(0, 1000).map((el) => (el.innerText != null ? el.innerText : el.textContent || '').trim())", [args[1]], { frame, read: true });
+    let texts = Array.isArray(raw) ? raw.map((item) => String(item ?? "")) : [];
+    if (texts.length === 0) texts = await pierce.textsAll(page, frame, args[1] as string);
+    return new Result({ texts, selector: args[1] }, texts.join("\n"), true);
   }
   need(args, 2, `get ${what} <selector>`);
   let element: Element;
@@ -159,7 +167,10 @@ function ms(value: unknown): string {
 export async function cmdVitals(ctx: Ctx, argv: string[]): Promise<Result> {
   const [, args] = parse(argv);
   const page = args.length ? await currentOrNew(ctx) : await ctx.state.page();
-  if (args.length) await navigate(ctx, page, normalizeUrl(args[0] as string));
+  if (args.length) {
+    refuseOnBorrowed(ctx, page, "navigate");
+    await navigate(ctx, page, normalizeUrl(args[0] as string));
+  }
   const data = record(await page.call("() => ardiaBrowse.vitals()", [], { frame: page.mainFrame, read: true }));
   const react = [...page.initScripts.values()].includes("react");
   data["hydration"] = react ? await mediaHooks.hydration(page) : null;
@@ -215,6 +226,7 @@ export async function cmdDiff(ctx: Ctx, argv: string[]): Promise<Result> {
     );
     need(positional, 2, "diff url <url1> <url2>");
     const page = await currentOrNew(ctx);
+    refuseOnBorrowed(ctx, page, "navigate");
     const shots: Uint8Array[] = [];
     const texts: string[] = [];
     for (const url of positional.slice(0, 2)) {

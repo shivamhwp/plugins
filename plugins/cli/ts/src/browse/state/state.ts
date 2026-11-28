@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
 import http from "node:http";
 import { formatG } from "../../pylib/format.ts";
@@ -22,6 +23,13 @@ import { monotonic } from "./wait.ts";
 export { parseRef, type Ref } from "./refs.ts";
 
 export const PAGE_SCHEMES = ["http:", "https:", "about:", "data:", "blob:", "file:", "chrome:", "chrome-extension:", "chrome-untrusted:", "devtools:", "view-source:"];
+export const targetScope = new AsyncLocalStorage<string>();
+export function withTarget<T>(targetId: string | null | undefined, fn: () => Promise<T>): Promise<T> {
+  return targetId ? targetScope.run(targetId, fn) : fn();
+}
+export function activeTarget(state: State): string | null {
+  return targetScope.getStore() ?? state?.current ?? null;
+}
 export const ACTIVE_TIMEOUT = 3.0;
 export const APPEAR_POLL = 0.15;
 export const PROBE_TIMEOUT = 3.0;
@@ -47,6 +55,7 @@ export const NO_PAGE =
 export const NO_SESSION_TAB =
   "This session has no tab yet, and it never takes the user's tab on its own. `ardia browse open <url>` opens a " +
   "background tab of its own; to work in the tab the user is looking at, pick it first with `ardia browse tab active`";
+const FOLLOWED_LOST_TAB = "The session moved to the tab that replaced its lost one while this call waited, so it didn't run; retry the call";
 
 export class RestartedBrowser extends BrowseError {
   override readonly exitCode: number = 2;
@@ -183,8 +192,13 @@ export class State extends Refs implements temptabs.TempTabState {
   readonly appTabs = new Map<string, string>();
   readonly usedAt = new Map<string, number>();
   readonly appGenerations = new Map<string, unknown>();
+  readonly onTabCreated = new Set<(targetId: string) => void>();
   readonly opened = new Set<string>();
   readonly created = new Set<string>();
+
+  noteTabCreated(targetId: string): void {
+    for (const listener of [...this.onTabCreated]) listener(targetId);
+  }
   readonly persisted = new Set<string>();
   readonly frames = new Map<string, string>();
   readonly leases = new Set<string>();
@@ -406,6 +420,11 @@ export class State extends Refs implements temptabs.TempTabState {
   }
 
   readonly onForget: ((targetId: string, page: Page | undefined) => void)[] = [];
+  readonly onNavigated = new Set<(targetId: string, url: string) => void>();
+
+  noteNavigated(targetId: string, url: string): void {
+    for (const listener of [...this.onNavigated]) listener(targetId, url);
+  }
 
   forgetTarget(targetId: string): void {
     this.usedAt.delete(targetId);
@@ -608,7 +627,15 @@ export class State extends Refs implements temptabs.TempTabState {
     }
     if (method === "Target.targetCreated" || method === "Target.targetInfoChanged") {
       const info = record(params["targetInfo"]);
-      if (isPageInfo(info)) this.targetInfos.set(String(info["targetId"]), info);
+      if (isPageInfo(info)) {
+        const id = String(info["targetId"]);
+        const known = this.targetInfos.has(id);
+        const before = this.targetInfos.get(id)?.["url"];
+        this.targetInfos.set(id, info);
+        const url = info["url"];
+        const live = (this.pages.get(id)?.sessionId ?? null) !== null;
+        if (method === "Target.targetInfoChanged" && known && !live && typeof url === "string" && url && url !== before) this.noteNavigated(id, url);
+      }
     } else if (method === "Target.targetDestroyed") {
       this.forgetTarget(String(params["targetId"]));
     } else if (method === "Target.detachedFromTarget") {
@@ -631,8 +658,9 @@ export class State extends Refs implements temptabs.TempTabState {
   async page(target: string | null = null): Promise<Page> {
     await this.connect();
     const started = clock();
-    const explicit = target !== null;
-    let targetId = target ?? this.current;
+    const scoped = target ?? targetScope.getStore() ?? null;
+    const explicit = scoped !== null;
+    let targetId = scoped ?? this.current;
     if (targetId === null) {
       if (this.pinTab && this.pinnedTarget) {
         throw new BrowseError(
@@ -643,6 +671,7 @@ export class State extends Refs implements temptabs.TempTabState {
       }
       if (!this.hadTab) throw new BrowseError(NO_SESSION_TAB, null, "no_session_tab");
       targetId = await this.followLostTab();
+      if (this.scriptsRunning > 0) throw new BrowseError(FOLLOWED_LOST_TAB, { targetId }, "tab_moved");
     }
     if (!this.targetInfos.has(targetId)) {
       await this.refreshTargets();
@@ -872,9 +901,9 @@ export class State extends Refs implements temptabs.TempTabState {
     return frame ?? null;
   }
 
-  async resolveBareRef(ref: string): Promise<[Page, Element]> {
+  async resolveBareRef(ref: string, expectedTarget: string | null = null): Promise<[Page, Element]> {
     try {
-      return await this.resolveRef(ref);
+      return await this.resolveRef(ref, expectedTarget);
     } catch (error) {
       if (!(error instanceof BrowseError) || error.code !== "unknown_ref") throw error;
       throw new BrowseError(
@@ -887,7 +916,8 @@ export class State extends Refs implements temptabs.TempTabState {
 
   async locate(selector: string, page: Page | null = null, wait = 0): Promise<[Page, Element]> {
     const ref = parseRef(selector);
-    if (ref) return isBareRef(selector) ? this.resolveBareRef(ref) : this.resolveRef(ref);
+    const expectedTarget = targetScope.getStore() ?? null;
+    if (ref) return isBareRef(selector) ? this.resolveBareRef(ref, expectedTarget) : this.resolveRef(ref, expectedTarget);
     const here = page ?? (await this.page());
     if (NTH_SUFFIX.test(selector)) flag("selector_nth", true);
     const deadline = monotonic() + wait;

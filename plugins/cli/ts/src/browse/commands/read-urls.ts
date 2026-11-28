@@ -7,6 +7,7 @@ import { add, count, flag } from "../metrics.ts";
 import { dedupeChrome } from "../read/chrome.ts";
 import { extractHtml } from "../read/readurl.ts";
 import { record } from "../state/records.ts";
+import { activeTarget, targetScope } from "../state/state.ts";
 import { clock } from "../metrics.ts";
 import { neutralize, safeHead, stripLoneSurrogates } from "../untrusted.ts";
 import type { Ctx } from "./ctx.ts";
@@ -331,7 +332,11 @@ export async function cmdReadUrls(ctx: Ctx, argv: string[]): Promise<Result> {
   const state = ctx.state;
   await state.connect();
   let notice: string | null = null;
-  if (state.current === null || !state.targetInfos.has(state.current)) {
+  const target = activeTarget(state);
+  const scoped = targetScope.getStore() ?? null;
+  if (scoped !== null && !state.targetInfos.has(scoped)) await state.refreshTargets();
+  if (scoped !== null && !state.targetInfos.has(scoped)) throw new BrowseError("That tab was closed", { targetId: scoped }, "tab_gone");
+  if (target === null || !state.targetInfos.has(target)) {
     await cmdTab(ctx, ["active"]);
     notice = `→ Read through your active tab [${state.tabId(state.current as string)}], as \`tab active\` picks it`;
   }

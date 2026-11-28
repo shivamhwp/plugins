@@ -5,25 +5,7 @@ import { waitUntil } from "../state/wait.ts";
 import { type Ctx } from "./ctx.ts";
 import { register } from "./index.ts";
 import { need, parse } from "./parse.ts";
-import { borrowedAhead, borrowedDepth, borrowedStepAllowed, historyFrom, noteBorrowedStep } from "./borrowed.ts";
-
-export function borrowedTab(ctx: Ctx): string | null {
-  const state = ctx.state;
-  return state.current && state.current === state.attached ? state.attached : null;
-}
-
-export function refuseOnBorrowed(ctx: Ctx, page: Page, what: string): void {
-  const borrowed = borrowedTab(ctx);
-  if (borrowed && borrowed === page.targetId) {
-    const tab = ctx.state.tabId(borrowed);
-    throw new BrowseError(
-      `This session is using your tab [${tab}] (picked with \`tab active\`), so it won't ${what} it. To drive that tab anyway, ` +
-        `pick it with \`ardia browse tab ${tab}\`; to browse on your own, use \`ardia browse open <url>\``,
-      { tabId: tab },
-      "borrowed_tab",
-    );
-  }
-}
+import { borrowedAhead, borrowedDepth, borrowedStepAllowed, borrowedTab, historyFrom, noteBorrowedStep, refuseOnBorrowed } from "./borrowed.ts";
 
 function entryUrl(entry: unknown): unknown {
   return entry !== null && typeof entry === "object" ? (entry as Record<string, unknown>)["url"] : undefined;
@@ -32,7 +14,7 @@ function entryUrl(entry: unknown): unknown {
 export async function cmdHistory(ctx: Ctx, _argv: string[]): Promise<Result> {
   const page = await ctx.state.page();
   const step = ctx.command === "back" ? -1 : 1;
-  const borrowed = borrowedTab(ctx) === page.targetId ? page.targetId : null;
+  const borrowed = borrowedTab(ctx.state) === page.targetId ? page.targetId : null;
   const ours = borrowed !== null && (step < 0 ? borrowedDepth(ctx.state, borrowed) > 0 : borrowedAhead(ctx.state, borrowed) > 0);
   if (!ours) refuseOnBorrowed(ctx, page, `go ${ctx.command} in`);
   const history = await page.send("Page.getNavigationHistory");
